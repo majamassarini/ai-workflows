@@ -8,5 +8,5 @@ spec:
   resources:
     requests:
       storage: 2Gi
-  storageClassName: gp3-csi
+  storageClassName: crc-csi-hostpath-provisioner
   volumeMode: Filesystem

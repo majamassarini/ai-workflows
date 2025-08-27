@@ -6,7 +6,7 @@ metadata:
     app: jira-issue-fetcher
     component: scheduler
 spec:
-  schedule: "*/30 * * * *"  # Every 30 minutes
+  schedule: "*/1 * * * *"  # Every 30 minutes
   concurrencyPolicy: Forbid  # Prevent overlapping runs
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 5
@@ -28,7 +28,7 @@ spec:
           restartPolicy: Never
           containers:
           - name: jira-issue-fetcher
-            image: 'jira-issue-fetcher:prod'
+            image: 'image-registry.openshift-image-registry.svc:5000/jotnar-prod/jira-issue-fetcher:prod'
             imagePullPolicy: Always
             env:
             - name: JIRA_URL

@@ -21,7 +21,7 @@ spec:
         deployment: valkey
     spec:
       containers:
-      - image: valkey:prod
+      - image: image-registry.openshift-image-registry.svc:5000/jotnar-prod/valkey:prod
         imagePullPolicy: IfNotPresent
         name: valkey
         ports:
