@@ -1,0 +1,44 @@
+{
+    "python.pythonPath": "./ai-workflow-new/bin/python",
+    "python.defaultInterpreterPath": "./ai-workflow-new/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.linting.flake8Enabled": true,
+    "python.formatting.provider": "black",
+
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.autoTestDiscoverOnSaveEnabled": true,
+    "python.testing.pytestPath": "./ai-workflow-new/bin/pytest",
+
+    // SELECT TESTING DIRECTORY!!!
+    // All of them can't work at the same time. utils.py from agents clashes with utils.py from mcp_server!!!
+
+    // "python.testing.cwd": "${workspaceFolder}/beeai/agents",
+    // "python.testing.env": {
+    //     "PYTHONPATH": "${workspaceFolder}/beeai/agents:${workspaceFolder}/beeai/common:${env:PYTHONPATH}"
+    // },
+
+    "python.testing.cwd": "${workspaceFolder}/beeai/mcp_server",
+    "python.testing.env": {
+          "PYTHONPATH": "${workspaceFolder}/beeai/mcp_server:${workspaceFolder}/beeai/common:${env:PYTHONPATH}"
+    },
+
+    //"python.testing.cwd": "${workspaceFolder}/beeai/jira_issue_fetcher",
+    //"python.testing.env": {
+    //      "PYTHONPATH": "${workspaceFolder}/beeai/jira_issue_fetcher:${workspaceFolder}/beeai/common:${env:PYTHONPATH}"
+    //},
+
+    // File watcher exclusions
+    "files.watcherExclude": {
+        "**/ai-workflow-new/**": true,
+        "**/.git/**": true,
+        "**/node_modules/**": true,
+        "**/__pycache__/**": true,
+        "**/.pytest_cache/**": true
+    },
+
+    // Tasks for running tests from correct directories
+    "tasks.version": "2.0.0"
+}
