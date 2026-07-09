@@ -1,0 +1,130 @@
+# Makefile for Testing Farm VM provisioning and Ymir deployment
+
+.PHONY: check-secrets provision-vm ssh-info stop-vm help
+
+# Check if all required secrets exist
+check-secrets:
+	@echo "Checking for required secrets in .secrets/testing-farm/..."
+	@MISSING=0; \
+	for file in pull-secret.txt gitlab-token jira-token testing-farm-token sentry-dsn vertex-key.json redhat-ymir-agent.keytab rhel-config.json; do \
+		if [ ! -f .secrets/testing-farm/$$file ]; then \
+			echo "  ❌ Missing: .secrets/testing-farm/$$file"; \
+			MISSING=$$((MISSING + 1)); \
+		else \
+			echo "  ✅ Found: .secrets/testing-farm/$$file"; \
+		fi; \
+	done; \
+	if [ $$MISSING -gt 0 ]; then \
+		echo ""; \
+		echo "ERROR: $$MISSING secret(s) missing!"; \
+		echo ""; \
+		echo "Please create missing secrets in .secrets/testing-farm/"; \
+		echo "See .secrets/testing-farm/README.md for instructions"; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "✅ All secrets present!"
+
+# Provision VM and deploy Ymir (runs for 30 minutes)
+provision-vm: check-secrets
+	@echo "=========================================="
+	@echo "Provisioning Testing Farm VM..."
+	@echo "=========================================="
+	@echo ""
+	@echo "This will:"
+	@echo "  1. Provision CentOS Stream 10 VM (12 CPU, 32GB RAM, 120GB disk)"
+	@echo "  2. Clone ai-workflows repository"
+	@echo "  3. Install and start OpenShift Local (CRC)"
+	@echo "  4. Create OpenShift project and secrets"
+	@echo "  5. Deploy all Ymir components (11 Deployments, 2 CronJobs)"
+	@echo "  6. Validate all pods are running and healthy"
+	@echo "  7. Run health checks (Valkey connectivity, pod status)"
+	@echo ""
+	@echo "Press Ctrl+C now to cancel, or wait 5 seconds to continue..."
+	@sleep 5
+	@echo ""
+	@echo "Encoding secrets for VM..."
+	@echo "Starting provisioning..."; \
+	tmt run --all \
+		-e TF_PULL_SECRET="$$(base64 -w0 < .secrets/testing-farm/pull-secret.txt)" \
+		-e TF_GITLAB_TOKEN="$$(base64 -w0 < .secrets/testing-farm/gitlab-token)" \
+		-e TF_JIRA_TOKEN="$$(base64 -w0 < .secrets/testing-farm/jira-token)" \
+		-e TF_TESTING_FARM_TOKEN="$$(base64 -w0 < .secrets/testing-farm/testing-farm-token)" \
+		-e TF_SENTRY_DSN="$$(base64 -w0 < .secrets/testing-farm/sentry-dsn)" \
+		-e TF_VERTEX_KEY="$$(base64 -w0 < .secrets/testing-farm/vertex-key.json)" \
+		-e TF_KEYTAB="$$(base64 -w0 < .secrets/testing-farm/redhat-ymir-agent.keytab)" \
+		-e TF_RHEL_CONFIG="$$(base64 -w0 < .secrets/testing-farm/rhel-config.json)" \
+		plan --name ymir-manual-test/remote \
+		--verbose 2>&1 | tee /tmp/tmt-ymir.log &
+	@echo $$! > /tmp/tmt-ymir.pid
+	@echo ""
+	@echo "VM provisioning started in background (PID: $$(cat /tmp/tmt-ymir.pid))"
+	@echo ""
+	@echo "Monitor progress:"
+	@echo "  tail -f /tmp/tmt-ymir.log"
+	@echo ""
+	@echo "Get SSH info (wait ~2 minutes first):"
+	@echo "  make ssh-info"
+
+# Show SSH connection information
+ssh-info:
+	@echo "=========================================="
+	@echo "SSH Connection Information"
+	@echo "=========================================="
+	@RUN_DIR=$$(ls -td /var/tmp/tmt/run-* 2>/dev/null | head -1); \
+	if [ -z "$$RUN_DIR" ]; then \
+		echo "ERROR: No tmt run found. Has provisioning started?"; \
+		exit 1; \
+	fi; \
+	SSH_KEY="$$RUN_DIR/plans/ymir-interactive/remote/provision/default-0/id_ecdsa"; \
+	SSH_PORT=$$(grep "port:" /tmp/tmt-ymir.log 2>/dev/null | tail -1 | awk '{print $$2}'); \
+	if [ -z "$$SSH_PORT" ]; then \
+		echo "ERROR: VM not ready yet. Wait a bit longer and try again."; \
+		echo ""; \
+		echo "Check progress:"; \
+		echo "  tail -f /tmp/tmt-ymir.log"; \
+		exit 1; \
+	fi; \
+	echo ""; \
+	echo "SSH Key: $$SSH_KEY"; \
+	echo "SSH Port: $$SSH_PORT"; \
+	echo ""; \
+	echo "Connect with:"; \
+	echo "  ssh -i $$SSH_KEY -p $$SSH_PORT root@127.0.0.1"; \
+	echo ""; \
+	echo "Or use this handy alias:"; \
+	echo "  alias ymir-vm='ssh -i $$SSH_KEY -p $$SSH_PORT root@127.0.0.1'"; \
+	echo "  ymir-vm"
+
+# Stop the VM and cleanup
+stop-vm:
+	@if [ -f /tmp/tmt-ymir.pid ]; then \
+		echo "Stopping VM (PID: $$(cat /tmp/tmt-ymir.pid))..."; \
+		kill $$(cat /tmp/tmt-ymir.pid) 2>/dev/null || echo "VM already stopped"; \
+		rm -f /tmp/tmt-ymir.pid; \
+		echo "VM stopped and cleaned up."; \
+	else \
+		echo "No VM PID file found. VM may not be running."; \
+	fi
+
+# Help target
+help:
+	@echo "Testing Farm VM Provisioning for Ymir"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  check-secrets  - Verify all required secrets exist in .secrets/testing-farm/"
+	@echo "  provision-vm   - Provision VM and deploy Ymir (runs ~15-20 min, keeps VM for 30 min)"
+	@echo "  ssh-info       - Show SSH connection details for the running VM"
+	@echo "  stop-vm        - Stop the VM and cleanup"
+	@echo "  help           - Show this help message"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  1. Prepare secrets: See .secrets/testing-farm/README.md"
+	@echo "  2. make -f Makefile.testing-farm check-secrets"
+	@echo "  3. make -f Makefile.testing-farm provision-vm"
+	@echo "  4. Wait ~15-20 minutes for deployment to complete"
+	@echo "  5. make -f Makefile.testing-farm ssh-info"
+	@echo "  6. SSH to VM and test Ymir"
+	@echo "  7. make -f Makefile.testing-farm stop-vm (or wait 30 min for auto-cleanup)"
+
+.DEFAULT_GOAL := help

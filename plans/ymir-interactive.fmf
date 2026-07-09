@@ -1,0 +1,282 @@
+summary: Interactive Ymir testing - VM stays alive for manual access
+description: |
+    Provisions a VM and keeps it alive for manual SSH access.
+    The test sleeps to give you time to SSH in and explore.
+
+environment:
+    DEPLOYMENT: dev
+    USER: tmt
+
+/remote:
+    summary: VM with SSH access for manual testing
+    provision:
+        how: virtual
+        image: centos-stream-9
+        hardware:
+            disk:
+                - size: ">= 100 GB"
+            memory: ">= 14 GB"
+            cpu:
+                processors: ">= 6"
+                flag:
+                    - "vmx"
+
+    prepare:
+        - name: Install basic tools
+          how: install
+          package:
+              - git
+              - make
+              - podman
+              - ansible-core
+              - jq
+              - curl
+              - wget
+              - python3-pip
+              - vim
+              - tar
+              - xz
+
+        - name: Clone ai-workflows repository
+          how: shell
+          script: |
+              set -eux
+              cd /root
+              git clone -b testing-farm-automation https://github.com/majamassarini/ai-workflows.git
+              echo "Repository cloned to /root/ai-workflows"
+
+        - name: Create secrets from environment
+          how: shell
+          script: |
+              set -eux
+              # Create secrets directory
+              mkdir -p /root/ai-workflows/.secrets/testing-farm
+
+              # Create secrets from environment variables (base64 encoded)
+              # These are set by the Makefile before running tmt
+              echo "${TF_PULL_SECRET:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/pull-secret.txt || echo "WARNING: TF_PULL_SECRET not set"
+              echo "${TF_GITLAB_TOKEN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/gitlab-token || echo "WARNING: TF_GITLAB_TOKEN not set"
+              echo "${TF_JIRA_TOKEN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/jira-token || echo "WARNING: TF_JIRA_TOKEN not set"
+              echo "${TF_TESTING_FARM_TOKEN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/testing-farm-token || echo "WARNING: TF_TESTING_FARM_TOKEN not set"
+              echo "${TF_SENTRY_DSN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/sentry-dsn || echo "WARNING: TF_SENTRY_DSN not set"
+              echo "${TF_VERTEX_KEY:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/vertex-key.json || echo "WARNING: TF_VERTEX_KEY not set"
+              echo "${TF_KEYTAB:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/redhat-ymir-agent.keytab || echo "WARNING: TF_KEYTAB not set"
+              echo "${TF_RHEL_CONFIG:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/rhel-config.json || echo "WARNING: TF_RHEL_CONFIG not set"
+
+              chmod 600 /root/ai-workflows/.secrets/testing-farm/*
+              echo "Secrets created in VM"
+              ls -la /root/ai-workflows/.secrets/testing-farm/
+
+        - name: Clone deployment repo for ansible playbooks
+          how: shell
+          script: |
+              set -eux
+              cd /tmp
+              git clone --depth=1 https://github.com/packit/deployment.git
+              echo "Deployment repo cloned"
+
+        - name: Create CRC user
+          how: shell
+          script: |
+              set -eux
+
+              # Create ansible inventory for localhost
+              cat > /tmp/inventory <<EOF
+              [all]
+              localhost ansible_connection=local
+              EOF
+
+              # Run ansible playbook
+              ansible-playbook -vv -i /tmp/inventory /tmp/deployment/playbooks/oc-cluster-user.yml -e user=crc
+
+        - name: Install CRC using our script
+          how: shell
+          script: |
+              set -eux
+              # Use our install script instead of ansible playbook (download issues)
+              cd /root/ai-workflows
+              ./scripts/install-crc.sh
+
+        - name: Configure CRC as crc user
+          how: shell
+          script: |
+              set -eux
+              # Run CRC config as the crc user
+              su - crc -c '
+                  set -eux
+                  crc config set consent-telemetry no
+                  crc config set disable-update-check true
+                  crc config set enable-cluster-monitoring false
+                  crc config set memory 12288
+                  crc config set disk-size 60
+                  crc setup
+              '
+
+        - name: Copy secrets for CRC user
+          how: shell
+          script: |
+              set -eux
+              # Copy ai-workflows to crc user home
+              cp -r /root/ai-workflows /home/crc/
+              chown -R crc:crc /home/crc/ai-workflows
+              echo "Copied ai-workflows to crc user home"
+
+        - name: Start CRC as crc user
+          how: shell
+          script: |
+              set -eux
+
+              # Verify pull secret exists
+              if [ ! -f /home/crc/ai-workflows/.secrets/testing-farm/pull-secret.txt ]; then
+                  echo "ERROR: Pull secret not found at /home/crc/ai-workflows/.secrets/testing-farm/pull-secret.txt"
+                  ls -la /home/crc/ai-workflows/.secrets/testing-farm/ || echo "Directory doesn't exist"
+                  exit 1
+              fi
+
+              # Get crc user UID for XDG_RUNTIME_DIR
+              CRC_UID=$(id -u crc)
+              XDG_RUNTIME_DIR="/run/user/${CRC_UID}"
+
+              # Run CRC start as the crc user with XDG_RUNTIME_DIR set
+              su - crc -c "
+                  set -eux
+                  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+
+                  # Start CRC with absolute path to pull secret
+                  /home/crc/.local/bin/crc start -c 6 -m 12000 -p /home/crc/ai-workflows/.secrets/testing-farm/pull-secret.txt
+
+                  # Create symlink to oc
+                  mkdir -p ~/.local/bin
+                  ln -sf ~/.crc/bin/oc/oc ~/.local/bin/oc
+              "
+
+        - name: Create OpenShift Secrets
+          how: shell
+          script: |
+              set -eux
+
+              # Run as crc user since CRC was started by crc user
+              su - crc -c '
+                  set -eux
+                  cd /home/crc/ai-workflows
+
+                  # Configure oc environment
+                  eval $(crc oc-env)
+
+                  # Login to OpenShift
+                  # Get password from CRC
+                  CRC_PASS=$(crc console --credentials | grep "Password:" | awk '"'"'{print $2}'"'"')
+                  oc login -u kubeadmin -p "${CRC_PASS}" https://api.crc.testing:6443
+
+                  # Create project
+                  oc new-project ymir-test
+
+                  # Create secrets
+                  SECRETS_DIR=/home/crc/ai-workflows/.secrets/testing-farm ./scripts/create-secrets.sh
+              '
+
+        - name: Modify Jira fetcher queries for testing
+          how: shell
+          script: |
+              set -eux
+              cd /home/crc/ai-workflows/openshift
+
+              # Modify the JQL queries to use a test label that won't match production issues
+              echo "Modifying Jira fetcher queries to use test-only JQL..."
+
+              # For the main fetcher: add "AND labels = ymir_testing_farm_test"
+              # This ensures it only picks up issues we explicitly tag for testing
+              sed -i 's|QUERY:.*|QUERY: "labels = ymir_testing_farm_test"|' configmap-jira-issue-fetcher-filter-env.yml
+
+              # The todo fetcher already uses ymir_todo label, change it to ymir_testing_farm_todo
+              sed -i 's|labels = "ymir_todo"|labels = "ymir_testing_farm_todo"|' configmap-jira-issue-fetcher-todo-env.yml
+
+              echo "Fetchers will only process issues with labels: ymir_testing_farm_test or ymir_testing_farm_todo"
+
+        - name: Deploy Ymir
+          how: shell
+          script: |
+              set -eux
+
+              # Run as crc user
+              su - crc -c '
+                  set -eux
+                  cd /home/crc/ai-workflows
+
+                  # Configure oc environment
+                  eval $(crc oc-env)
+
+                  # Run deployment
+                  cd openshift
+                  ./deploy.sh
+              '
+
+        - name: Show deployment status
+          how: shell
+          script: |
+              set -x
+              echo "=========================================="
+              echo "YMIR DEPLOYED SUCCESSFULLY"
+              echo "=========================================="
+
+              # Run as crc user
+              su - crc -c '"'"'
+                  set -x
+                  # Configure oc environment
+                  eval $(crc oc-env)
+
+                  echo ""
+                  echo "Deployments:"
+                  oc get deployments
+
+                  echo ""
+                  echo "Pods:"
+                  oc get pods
+              '"'"'
+
+              echo ""
+              echo "=========================================="
+              echo "VM IS READY FOR MANUAL TESTING"
+              echo "=========================================="
+              echo ""
+              echo "To connect and inspect:"
+              echo "  ssh -i <key_file> -p <port> root@127.0.0.1"
+              echo "  Then: su - crc"
+              echo ""
+              echo "Useful commands in VM (as crc user):"
+              echo "  eval \$(crc oc-env)"
+              echo "  oc get pods"
+              echo "  oc logs deployment/triage-agent"
+              echo "  oc exec deployment/valkey -- valkey-cli LRANGE triage_queue 0 -1"
+              echo "=========================================="
+
+    discover:
+        how: shell
+        tests:
+            - name: keep-alive
+              test: |
+                  #!/bin/bash
+                  set -eux
+
+                  echo "=========================================="
+                  echo "VM is running and waiting for your access"
+                  echo "=========================================="
+                  echo ""
+                  echo "You can now SSH to this VM using the details printed above."
+                  echo ""
+                  echo "This test will sleep for 30 minutes to keep the VM alive."
+                  echo "Press Ctrl+C to stop and cleanup the VM."
+                  echo ""
+
+                  # Sleep for 30 minutes (1800 seconds)
+                  # You can Ctrl+C to stop early
+                  for i in {1..30}; do
+                      echo "Minute $i/30 - VM still alive..."
+                      sleep 60
+                  done
+
+                  echo "30 minutes elapsed. Test ending, VM will be cleaned up."
+              duration: 35m
+
+    execute:
+        how: tmt

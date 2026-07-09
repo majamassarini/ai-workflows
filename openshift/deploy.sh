@@ -34,8 +34,12 @@ import_image() {
     return 1
 }
 
-# Egress rules
-apply tenant-egress.yml
+# Egress rules (skip on CRC - not supported)
+if ! oc cluster-info | grep -q "api.crc.testing"; then
+    apply tenant-egress.yml
+else
+    echo "Skipping tenant-egress.yml (not supported on CRC)"
+fi
 
 # Shared ConfigMaps
 apply configmap-agents-env.yml

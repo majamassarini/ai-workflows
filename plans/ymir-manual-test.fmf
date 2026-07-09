@@ -1,0 +1,273 @@
+summary: Manual test - stops after CRC installation
+description: |
+    Installs CRC and stops for manual testing.
+
+environment+:
+    TF_PULL_SECRET: ""
+    TF_GITLAB_TOKEN: ""
+    TF_JIRA_TOKEN: ""
+    TF_TESTING_FARM_TOKEN: ""
+    TF_SENTRY_DSN: ""
+    TF_VERTEX_KEY: ""
+    TF_KEYTAB: ""
+    TF_RHEL_CONFIG: ""
+
+adjust+:
+    - because: "Need sufficient resources for 11 Ymir deployments"
+      hardware:
+          memory: ">= 48 GiB"
+          cpu:
+              cores: ">= 20"
+          disk:
+              - size: ">= 150 GB"
+          virtualization:
+              is-supported: true
+
+/remote:
+    prepare:
+        - name: Install tools
+          how: install
+          package: [git, make, ansible-core, tar, xz]
+
+        - name: Clone repo
+          how: shell
+          script: |
+              cd /root
+              git clone -b testing-farm-automation https://github.com/majamassarini/ai-workflows.git
+
+        - name: Create secrets
+          how: shell
+          script: |
+              set -eux
+              mkdir -p /root/ai-workflows/.secrets/testing-farm
+              echo "${TF_PULL_SECRET:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/pull-secret.txt 2>/dev/null || true
+              echo "${TF_GITLAB_TOKEN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/gitlab-token 2>/dev/null || true
+              echo "${TF_JIRA_TOKEN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/jira-token 2>/dev/null || true
+              echo "${TF_TESTING_FARM_TOKEN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/testing-farm-token 2>/dev/null || true
+              echo "${TF_SENTRY_DSN:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/sentry-dsn 2>/dev/null || true
+              echo "${TF_VERTEX_KEY:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/vertex-key.json 2>/dev/null || true
+              echo "${TF_KEYTAB:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/redhat-ymir-agent.keytab 2>/dev/null || true
+              echo "${TF_RHEL_CONFIG:-}" | base64 -d > /root/ai-workflows/.secrets/testing-farm/rhel-config.json 2>/dev/null || true
+
+              # Extract JSON from YAML if pull secret has frontmatter
+              if grep -q "^pull_secret:" /root/ai-workflows/.secrets/testing-farm/pull-secret.txt 2>/dev/null; then
+                  grep "^pull_secret:" /root/ai-workflows/.secrets/testing-farm/pull-secret.txt | cut -d" " -f2- > /tmp/pull-secret-clean.json
+                  mv /tmp/pull-secret-clean.json /root/ai-workflows/.secrets/testing-farm/pull-secret.txt
+              fi
+
+        - name: Clone deployment
+          how: shell
+          script: |
+              cd /tmp
+              git clone --depth=1 https://github.com/packit/deployment.git
+
+        - name: Create user
+          how: shell
+          script: |
+              cat > /tmp/inventory <<EOF
+              [all]
+              localhost ansible_connection=local
+              EOF
+              ansible-playbook -i /tmp/inventory /tmp/deployment/playbooks/oc-cluster-user.yml -e user=crc
+
+        - name: Install CRC
+          how: shell
+          script: |
+              cd /root/ai-workflows
+              ./scripts/install-crc.sh
+
+        - name: Copy to crc
+          how: shell
+          script: |
+              cp -r /root/ai-workflows /home/crc/
+              chown -R crc:crc /home/crc/ai-workflows
+
+        - name: Configure and setup CRC
+          how: shell
+          script: |
+              set -eux
+              su - crc -c '
+                  set -eux
+                  crc config set consent-telemetry no
+                  crc config set disable-update-check true
+                  crc config set enable-cluster-monitoring false
+                  crc config set cpus 18
+                  crc config set memory 40960
+                  crc config set disk-size 130
+                  crc setup
+              '
+
+        - name: Set XDG_RUNTIME_DIR for crc user
+          how: shell
+          script: |
+              set -eux
+              # Add XDG_RUNTIME_DIR to crc user's .bashrc
+              cat >> /home/crc/.bashrc <<'EOF'
+              export XDG_RUNTIME_DIR=/run/user/$(id -u)
+              EOF
+
+        - name: Start CRC
+          how: shell
+          script: |
+              set -eux
+
+              # Get crc user UID for XDG_RUNTIME_DIR
+              CRC_UID=$(id -u crc)
+              XDG_RUNTIME_DIR="/run/user/${CRC_UID}"
+
+              # Start CRC as crc user with XDG_RUNTIME_DIR set
+              su - crc -c "
+                  set -eux
+                  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+
+                  # Start CRC with pull secret file (use config values: 10 CPUs, 24GB RAM)
+                  crc start --pull-secret-file ~/ai-workflows/.secrets/testing-farm/pull-secret.txt
+
+                  # Show credentials
+                  crc console --credentials
+              "
+
+        - name: Deploy Ymir to OpenShift
+          how: shell
+          script: |
+              set -eux
+
+              # Run as crc user
+              su - crc -c '
+                  set -eux
+                  cd /home/crc/ai-workflows
+
+                  # Configure oc environment
+                  eval $(crc oc-env)
+
+                  # Get kubeadmin password
+                  CRC_PASS=$(crc console --credentials | grep "Password:" | awk '"'"'{print $2}'"'"')
+
+                  # Login to OpenShift
+                  oc login -u kubeadmin -p "${CRC_PASS}" https://api.crc.testing:6443
+
+                  # Create project (match name expected by deploy.sh)
+                  oc new-project jotnar-ymir--jotnar-ymir || oc project jotnar-ymir--jotnar-ymir
+
+                  # Create secrets from .secrets/testing-farm/
+                  echo "Creating OpenShift secrets..."
+                  oc create secret generic gitlab-env \
+                      --from-file=GITLAB_TOKEN=.secrets/testing-farm/gitlab-token \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  oc create secret generic jira-env \
+                      --from-file=JIRA_TOKEN=.secrets/testing-farm/jira-token \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  oc create secret generic testing-farm-env \
+                      --from-file=TESTING_FARM_API_TOKEN=.secrets/testing-farm/testing-farm-token \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  oc create secret generic sentry-env \
+                      --from-file=SENTRY_DSN=.secrets/testing-farm/sentry-dsn \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  oc create secret generic vertex-key \
+                      --from-file=jotnar-vertex-prod.json=.secrets/testing-farm/vertex-key.json \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  oc create secret generic redhat-ymir-agent-keytab \
+                      --from-file=redhat-ymir-agent.keytab=.secrets/testing-farm/redhat-ymir-agent.keytab \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  oc create configmap rhel-config \
+                      --from-file=rhel-config.json=.secrets/testing-farm/rhel-config.json \
+                      --dry-run=client -o yaml | oc apply -f -
+
+                  # Deploy Ymir
+                  echo "Deploying Ymir..."
+                  cd openshift
+                  ./deploy.sh
+
+                  echo "Deployment initiated!"
+              '
+
+    discover:
+        how: shell
+        tests:
+            - name: validate-deployment
+              test: |
+                  #!/bin/bash
+                  set -eux
+
+                  echo "=========================================="
+                  echo "Validating Ymir Deployment"
+                  echo "=========================================="
+
+                  # Run as crc user
+                  su - crc -c '
+                      set -eux
+                      eval $(crc oc-env)
+                      oc project jotnar-ymir--jotnar-ymir
+
+                      # List of expected deployments
+                      DEPLOYMENTS=(
+                          "triage-agent"
+                          "backport-agent-c9s"
+                          "backport-agent-c10s"
+                          "rebase-agent-c9s"
+                          "rebase-agent-c10s"
+                          "rebuild-agent-c9s"
+                          "rebuild-agent-c10s"
+                          "mcp-gateway"
+                          "valkey"
+                          "phoenix"
+                          "redis-commander"
+                      )
+
+                      echo ""
+                      echo "Waiting for deployments to be ready (timeout: 10 minutes)..."
+                      TIMEOUT=600
+
+                      for deploy in "${DEPLOYMENTS[@]}"; do
+                          echo "Checking deployment/$deploy..."
+                          oc rollout status deployment/$deploy --timeout="${TIMEOUT}s" || {
+                              echo "ERROR: Deployment $deploy failed to become ready"
+                              oc get pods -l app=$deploy
+                              oc logs -l app=$deploy --tail=50
+                              exit 1
+                          }
+                      done
+
+                      echo ""
+                      echo "=========================================="
+                      echo "All Deployments Ready!"
+                      echo "=========================================="
+
+                      # Show final status
+                      oc get deployments
+                      echo ""
+                      oc get pods
+                      echo ""
+
+                      # Basic health checks
+                      echo "Running health checks..."
+
+                      # Check Valkey
+                      echo "Testing Valkey connectivity..."
+                      oc exec deployment/valkey -- valkey-cli PING | grep -q PONG || {
+                          echo "ERROR: Valkey health check failed"
+                          exit 1
+                      }
+                      echo "✅ Valkey is responding"
+
+                      # Check if any pods are in error state
+                      if oc get pods | grep -E "(Error|CrashLoopBackOff|ImagePullBackOff)"; then
+                          echo "ERROR: Found pods in error state"
+                          exit 1
+                      fi
+
+                      echo ""
+                      echo "=========================================="
+                      echo "✅ ALL VALIDATION CHECKS PASSED"
+                      echo "=========================================="
+                  '
+              duration: 20m
+
+    execute:
+        how: tmt
