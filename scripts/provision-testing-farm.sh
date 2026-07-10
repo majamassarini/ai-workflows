@@ -1,19 +1,20 @@
 #!/bin/bash
-# Provision a Testing Farm VM using tft CLI with nested virtualization
+# Provision an Internal Testing Farm VM using tft CLI with nested virtualization
 # Requires: pip install --user tft-cli
 
 set -euo pipefail
 
 SECRETS_DIR="$(cd "$(dirname "$0")/../.secrets/testing-farm" && pwd)"
 
-# Check for Testing Farm token
-if [ ! -f "$SECRETS_DIR/testing-farm-token" ]; then
-    echo "ERROR: Testing Farm token not found at $SECRETS_DIR/testing-farm-token"
-    echo "Get one from: https://api.dev.testing-farm.io/v0.1/docs#/token"
+# Check for Internal Testing Farm token
+if [ ! -f "$SECRETS_DIR/testing-farm-internal-token" ]; then
+    echo "ERROR: Internal Testing Farm token not found at $SECRETS_DIR/testing-farm-internal-token"
+    echo "This script uses Internal Testing Farm (Red Hat Ranch) for VPN access"
     exit 1
 fi
 
-export TESTING_FARM_API_TOKEN=$(cat "$SECRETS_DIR/testing-farm-token")
+export TESTING_FARM_API_TOKEN=$(cat "$SECRETS_DIR/testing-farm-internal-token")
+export TESTING_FARM_ENDPOINT="https://api.farm.opentlc.redhat.com/v0.1"
 
 # Check if testing-farm is available, install if needed
 if ! command -v testing-farm &> /dev/null; then

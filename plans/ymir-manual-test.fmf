@@ -127,12 +127,12 @@ adjust+:
                   crc console --credentials
               "
 
-        - name: Deploy Ymir to OpenShift
+        - name: Prepare OpenShift project and secrets
           how: shell
           script: |
               set -eux
 
-              # Run as crc user
+              # Run as crc user - prepare project and secrets, ready for manual deploy.sh
               su - crc -c '
                   set -eux
                   cd /home/crc/ai-workflows
@@ -179,95 +179,15 @@ adjust+:
                       --from-file=rhel-config.json=.secrets/testing-farm/rhel-config.json \
                       --dry-run=client -o yaml | oc apply -f -
 
-                  # Deploy Ymir
-                  echo "Deploying Ymir..."
-                  cd openshift
-                  ./deploy.sh
-
-                  echo "Deployment initiated!"
+                  echo ""
+                  echo "=========================================="
+                  echo "Environment ready for manual deployment!"
+                  echo "=========================================="
+                  echo ""
+                  echo "To deploy Ymir manually, SSH to this VM and run:"
+                  echo "  su - crc"
+                  echo "  cd /home/crc/ai-workflows/openshift"
+                  echo "  eval \$(crc oc-env)"
+                  echo "  ./deploy.sh"
+                  echo ""
               '
-
-    discover:
-        how: shell
-        tests:
-            - name: validate-deployment
-              test: |
-                  #!/bin/bash
-                  set -eux
-
-                  echo "=========================================="
-                  echo "Validating Ymir Deployment"
-                  echo "=========================================="
-
-                  # Run as crc user
-                  su - crc -c '
-                      set -eux
-                      eval $(crc oc-env)
-                      oc project jotnar-ymir--jotnar-ymir
-
-                      # List of expected deployments
-                      DEPLOYMENTS=(
-                          "triage-agent"
-                          "backport-agent-c9s"
-                          "backport-agent-c10s"
-                          "rebase-agent-c9s"
-                          "rebase-agent-c10s"
-                          "rebuild-agent-c9s"
-                          "rebuild-agent-c10s"
-                          "mcp-gateway"
-                          "valkey"
-                          "phoenix"
-                          "redis-commander"
-                      )
-
-                      echo ""
-                      echo "Waiting for deployments to be ready (timeout: 10 minutes)..."
-                      TIMEOUT=600
-
-                      for deploy in "${DEPLOYMENTS[@]}"; do
-                          echo "Checking deployment/$deploy..."
-                          oc rollout status deployment/$deploy --timeout="${TIMEOUT}s" || {
-                              echo "ERROR: Deployment $deploy failed to become ready"
-                              oc get pods -l app=$deploy
-                              oc logs -l app=$deploy --tail=50
-                              exit 1
-                          }
-                      done
-
-                      echo ""
-                      echo "=========================================="
-                      echo "All Deployments Ready!"
-                      echo "=========================================="
-
-                      # Show final status
-                      oc get deployments
-                      echo ""
-                      oc get pods
-                      echo ""
-
-                      # Basic health checks
-                      echo "Running health checks..."
-
-                      # Check Valkey
-                      echo "Testing Valkey connectivity..."
-                      oc exec deployment/valkey -- valkey-cli PING | grep -q PONG || {
-                          echo "ERROR: Valkey health check failed"
-                          exit 1
-                      }
-                      echo "✅ Valkey is responding"
-
-                      # Check if any pods are in error state
-                      if oc get pods | grep -E "(Error|CrashLoopBackOff|ImagePullBackOff)"; then
-                          echo "ERROR: Found pods in error state"
-                          exit 1
-                      fi
-
-                      echo ""
-                      echo "=========================================="
-                      echo "✅ ALL VALIDATION CHECKS PASSED"
-                      echo "=========================================="
-                  '
-              duration: 20m
-
-    execute:
-        how: tmt
