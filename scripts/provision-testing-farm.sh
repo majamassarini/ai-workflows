@@ -33,6 +33,7 @@ echo "=========================================="
 # Environment vars passed as base64-encoded secrets
 # Increased resources for 11 Ymir deployments + infrastructure
 testing-farm request \
+    --api "$TESTING_FARM_ENDPOINT" \
     --compose CentOS-Stream-10 \
     --arch x86_64 \
     --test-type fmf \
