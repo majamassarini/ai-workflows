@@ -43,7 +43,7 @@ testing-farm request \
     --environment "TF_PULL_SECRET=$(base64 -w0 < "$SECRETS_DIR/pull-secret.txt")" \
     --environment "TF_GITLAB_TOKEN=$(base64 -w0 < "$SECRETS_DIR/gitlab-token")" \
     --environment "TF_JIRA_TOKEN=$(base64 -w0 < "$SECRETS_DIR/jira-token")" \
-    --environment "TF_TESTING_FARM_TOKEN=$(base64 -w0 < "$SECRETS_DIR/testing-farm-token")" \
+    --environment "TF_TESTING_FARM_TOKEN=$(base64 -w0 < "$SECRETS_DIR/testing-farm-internal-token")" \
     --environment "TF_SENTRY_DSN=$(base64 -w0 < "$SECRETS_DIR/sentry-dsn")" \
     --environment "TF_VERTEX_KEY=$(base64 -w0 < "$SECRETS_DIR/vertex-key.json")" \
     --environment "TF_KEYTAB=$(base64 -w0 < "$SECRETS_DIR/redhat-ymir-agent.keytab")" \

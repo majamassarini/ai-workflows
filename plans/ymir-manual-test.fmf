@@ -191,3 +191,15 @@ adjust+:
                   echo "  ./deploy.sh"
                   echo ""
               '
+
+    discover:
+        how: shell
+        tests:
+            - name: manual-test-ready
+              test: |
+                  #!/bin/bash
+                  echo "VM ready for manual testing"
+                  exit 0
+
+    execute:
+        how: tmt
