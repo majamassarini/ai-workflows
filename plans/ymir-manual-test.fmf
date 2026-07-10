@@ -195,11 +195,39 @@ adjust+:
     discover:
         how: shell
         tests:
-            - name: manual-test-ready
+            - name: keep-vm-alive
               test: |
                   #!/bin/bash
-                  echo "VM ready for manual testing"
+                  echo ""
+                  echo "=========================================="
+                  echo "VM Ready for Manual Testing"
+                  echo "=========================================="
+                  echo ""
+                  echo "CRC is running and ready for deployment!"
+                  echo ""
+                  echo "To deploy Ymir:"
+                  echo "  su - crc"
+                  echo "  cd /home/crc/ai-workflows/openshift"
+                  echo "  eval \$(crc oc-env)"
+                  echo "  ./deploy.sh"
+                  echo ""
+                  echo "Keeping VM alive for 2 hours..."
+                  echo ""
+
+                  # Keep VM alive for 2 hours (7200 seconds)
+                  # Show progress every minute
+                  END_TIME=$((SECONDS + 7200))
+                  while [ $SECONDS -lt $END_TIME ]; do
+                      REMAINING=$((END_TIME - SECONDS))
+                      MINUTES=$((REMAINING / 60))
+                      echo "[$(date +%H:%M:%S)] VM still alive - ${MINUTES} minutes remaining"
+                      sleep 60
+                  done
+
+                  echo ""
+                  echo "Test timeout reached, VM will be torn down"
                   exit 0
+              duration: 2h
 
     execute:
         how: tmt

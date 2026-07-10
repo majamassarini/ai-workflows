@@ -53,9 +53,21 @@ testing-farm request \
     --git-ref testing-farm-automation \
     --plan ymir-manual-test/remote
 
+
+# The testing-farm command streams progress and waits for completion
+# The VM will stay alive for 2 hours showing progress every minute
+#
+# To get SSH access while the test is running:
+# 1. Note the request ID from the output above (looks like: fda23566-5c23-419a-8250-5999f148eeb0)
+# 2. Check artifacts URL: https://artifacts.dev.testing-farm.io/<request-id>/
+# 3. Look for SSH details in: <request-id>/plans/ymir-manual-test-remote/provision/default-0/
+# 4. SSH key and connection info will be there
+#
+# Or use the Testing Farm web UI to get SSH access details
+
 echo ""
 echo "=========================================="
-echo "Check status with: tft requests list"
-echo "Get details with: tft requests get <request-id>"
-echo "Cancel with: tft requests cancel <request-id>"
+echo "VM will remain alive for 2 hours"
+echo "The test will show progress updates every minute"
+echo "Check the artifacts URL above for SSH access details"
 echo "=========================================="
