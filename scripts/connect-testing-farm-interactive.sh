@@ -31,4 +31,4 @@ tmt run --verbose \
     -e TF_KEYTAB="$(base64 -w0 < "$SECRETS_DIR/redhat-ymir-agent.keytab")" \
     -e TF_RHEL_CONFIG="$(base64 -w0 < "$SECRETS_DIR/rhel-config.json")" \
     plan --name ymir-manual-test/remote \
-    --interactive login --step provision
+    login --step provision+
