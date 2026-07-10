@@ -38,18 +38,34 @@ if ! ssh-add -L &>/dev/null; then
 fi
 
 echo ""
-echo "Reserving VM (takes ~2-3 minutes)..."
+echo "Reserving VM with hardware requirements (20 CPUs, 48GB RAM, 150GB disk)..."
+echo "This may take a while if no matching VM is available."
+echo "Will timeout after 5 minutes if no VM found."
 echo ""
 
-# Reserve VM
-RESERVATION_OUTPUT=$(testing-farm reserve \
+# Reserve VM with timeout
+RESERVATION_OUTPUT=$(timeout 300 testing-farm reserve \
     --compose CentOS-Stream-10 \
     --arch x86_64 \
     --hardware 'memory=>= 48 GiB' \
     --hardware 'disk.size=>= 150 GB' \
     --hardware 'cpu.cores=>= 20' \
     --hardware 'virtualization.is-supported=true' \
-    --duration 120 2>&1)
+    --duration 120 2>&1 || echo "TIMEOUT")
+
+if echo "$RESERVATION_OUTPUT" | grep -q "TIMEOUT"; then
+    echo ""
+    echo "ERROR: Reservation timed out after 5 minutes."
+    echo "No VM with requested hardware (20 CPUs, 48GB RAM, 150GB disk) is available."
+    echo ""
+    echo "You can either:"
+    echo "  1. Wait and try again later"
+    echo "  2. Request a smaller VM (may not have enough resources for CRC)"
+    echo ""
+    echo "To reserve without hardware constraints (not recommended for CRC):"
+    echo "  testing-farm reserve --compose CentOS-Stream-10 --arch x86_64 --duration 120"
+    exit 1
+fi
 
 echo "$RESERVATION_OUTPUT"
 
